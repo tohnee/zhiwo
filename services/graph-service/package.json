@@ -1,0 +1,13 @@
+{
+  "name": "@knowledgeos/graph-service",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "dependencies": {
+    "@knowledgeos/shared": "workspace:*",
+    "neo4j-driver": "^5.28.2"
+  }
+}

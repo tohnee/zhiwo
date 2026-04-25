@@ -1,0 +1,16 @@
+{
+  "name": "api-gateway",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@knowledgeos/agent-service": "workspace:*",
+    "@knowledgeos/graph-service": "workspace:*",
+    "@knowledgeos/ingestion-service": "workspace:*",
+    "@knowledgeos/shared": "workspace:*"
+  }
+}

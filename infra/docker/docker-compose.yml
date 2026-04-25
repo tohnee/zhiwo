@@ -1,0 +1,20 @@
+services:
+  api:
+    image: node:24-alpine
+    working_dir: /app
+    volumes:
+      - ../..:/app
+    command: node apps/api-gateway/src/server.js
+    ports:
+      - "8787:8787"
+
+  web:
+    image: node:24-alpine
+    working_dir: /app
+    volumes:
+      - ../..:/app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter web dev --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api

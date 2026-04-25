@@ -1,0 +1,12 @@
+{
+  "name": "knowledgeos-mvp",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev:api": "node apps/api-gateway/src/server.js",
+    "dev:web": "pnpm --filter web dev --host 0.0.0.0",
+    "test:api": "node --test apps/api-gateway/src/server.test.js",
+    "build:web": "pnpm --filter web build",
+    "test:web": "pnpm --filter web test --run"
+  }
+}
