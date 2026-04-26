@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { loadDashboardData, loadNodeDetail, saveEditorBlock } from "./api";
+import {
+  createNoteFolder,
+  loadDashboardData,
+  loadNodeDetail,
+  loadNoteDocument,
+  loadSourceDocument,
+  moveNoteDocument,
+  saveEditorBlock,
+  saveNoteDocument,
+  sendChatPrompt
+} from "./api";
 import { mockDashboardData } from "../data/mock";
 
 describe("loadDashboardData", () => {
@@ -95,5 +105,167 @@ describe("loadDashboardData", () => {
 
     expect(result?.id).toBe("n1");
     expect(result?.metadata.storageMode).toBe("neo4j");
+  });
+
+  it("submits a chat prompt and returns answer metadata", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          answer: "Grounded answer",
+          mode: "live",
+          steps: ["Planner -> scope", "Retriever -> evidence"],
+          citations: [
+            {
+              label: "Memo",
+              sourceId: "rss",
+              excerptId: "excerpt-rss-1",
+              preview: "Memo excerpt"
+            }
+          ]
+        })
+      })
+    );
+
+    const result = await sendChatPrompt("Summarize the memo");
+
+    expect(result.answer).toBe("Grounded answer");
+    expect(result.mode).toBe("live");
+    expect(result.citations[0].label).toBe("Memo");
+  });
+
+  it("loads a source document through the API", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          source: {
+            id: "rss",
+            title: "Board Memo",
+            kind: "rss",
+            content: "Board memo content",
+            excerpts: [
+              {
+                id: "excerpt-rss-1",
+                sourceId: "rss",
+                title: "Memo excerpt",
+                text: "Highlighted excerpt",
+                order: 1
+              }
+            ]
+          }
+        })
+      })
+    );
+
+    const result = await loadSourceDocument("rss");
+
+    expect(result?.id).toBe("rss");
+    expect(result?.excerpts[0].id).toBe("excerpt-rss-1");
+  });
+
+  it("loads a note document through the API", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          note: {
+            id: "note-1",
+            title: "Saved answer",
+            folderId: "folder-ideas",
+            content: "Loaded note body",
+            citations: []
+          }
+        })
+      })
+    );
+
+    const result = await loadNoteDocument("note-1");
+
+    expect(result?.id).toBe("note-1");
+    expect(result?.content).toBe("Loaded note body");
+  });
+
+  it("saves a note document through the API", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          note: {
+            id: "note-1",
+            title: "Saved answer",
+            folderId: "folder-ideas",
+            content: "Updated note body",
+            citations: []
+          }
+        })
+      })
+    );
+
+    const result = await saveNoteDocument({
+      id: "note-1",
+      title: "Saved answer",
+      folderId: "folder-ideas",
+      content: "Updated note body",
+      citations: []
+    });
+
+    expect(result.id).toBe("note-1");
+    expect(result.content).toBe("Updated note body");
+  });
+
+  it("creates a note folder through the API", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          folder: {
+            id: "folder-projects",
+            name: "Projects",
+            path: "Workspace/Projects",
+            children: []
+          }
+        })
+      })
+    );
+
+    const result = await createNoteFolder({
+      parentId: "folder-root",
+      name: "Projects"
+    });
+
+    expect(result.id).toBe("folder-projects");
+    expect(result.path).toBe("Workspace/Projects");
+  });
+
+  it("moves a note document through the API", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          note: {
+            id: "note-1",
+            title: "Saved answer",
+            folderId: "folder-projects",
+            content: "Updated note body",
+            citations: []
+          }
+        })
+      })
+    );
+
+    const result = await moveNoteDocument({
+      noteId: "note-1",
+      folderId: "folder-projects"
+    });
+
+    expect(result.id).toBe("note-1");
+    expect(result.folderId).toBe("folder-projects");
   });
 });

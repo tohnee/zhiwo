@@ -44,6 +44,10 @@ export function createServer({
       ingestionService.listSources(),
       graphService.getSummary()
     ]);
+    const storageMode =
+      graphSummary.storageMode ??
+      graphSummary.nodes[0]?.metadata?.storageMode ??
+      "memory";
 
     return {
       sources: [...sources, ...manualSources],
@@ -62,7 +66,7 @@ export function createServer({
         retrieval: [
           `RSS mode: ${sources.find((source) => source.kind === "rss")?.mode ?? "unknown"}`,
           `PDF mode: ${sources.find((source) => source.kind === "pdf")?.mode ?? "unknown"}`,
-          `Storage mode: ${graphSummary.storageMode}`
+          `Storage mode: ${storageMode}`
         ],
         reasoning: ["Conflict check complete", "Timeline aligned", "Sources traceable"]
       }
@@ -129,6 +133,87 @@ export function createServer({
         steps: result.steps.map((step) => `${step.agent}${step.intent ? ` -> ${step.intent}` : ""}`),
         citations: result.citations
       });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/api/source/")) {
+      const sourceId = url.pathname.split("/").at(-1);
+      const source = await graphService.getSourceDocument(sourceId);
+
+      if (!source) {
+        sendJson(response, 404, { error: "Source not found" });
+        return;
+      }
+
+      sendJson(response, 200, { source });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/notes/tree") {
+      const tree = await graphService.getNoteTree();
+      sendJson(response, 200, { tree });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/api/note/")) {
+      const noteId = url.pathname.split("/").at(-1);
+      const note = await graphService.getNoteDocument(noteId);
+
+      if (!note) {
+        sendJson(response, 404, { error: "Note not found" });
+        return;
+      }
+
+      sendJson(response, 200, { note });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/note") {
+      const body = await readJsonBody(request);
+      const note = await graphService.saveNoteDocument({
+        id: String(body.id ?? ""),
+        title: String(body.title ?? "Untitled note"),
+        folderId: String(body.folderId ?? "folder-root"),
+        content: String(body.content ?? ""),
+        citations: Array.isArray(body.citations) ? body.citations : []
+      });
+
+      sendJson(response, 200, { note });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/note/folder") {
+      const body = await readJsonBody(request);
+      const folder = await graphService.createNoteFolder({
+        parentId: String(body.parentId ?? "folder-root"),
+        name: String(body.name ?? "New folder")
+      });
+
+      sendJson(response, 200, { folder });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/note/move") {
+      const body = await readJsonBody(request);
+      const note = await graphService.moveNoteDocument({
+        noteId: String(body.noteId ?? ""),
+        folderId: String(body.folderId ?? "")
+      });
+
+      sendJson(response, 200, { note });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/answer/save-to-note") {
+      const body = await readJsonBody(request);
+      const result = await graphService.saveAnswerToNote({
+        folderId: String(body.folderId ?? ""),
+        title: String(body.title ?? "Saved answer"),
+        content: String(body.content ?? ""),
+        citations: Array.isArray(body.citations) ? body.citations : []
+      });
+
+      sendJson(response, 200, result);
       return;
     }
 

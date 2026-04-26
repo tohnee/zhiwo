@@ -29,13 +29,16 @@
 - 为 `graph-service` 增加 Neo4j summary / block save / node detail 适配层
 - 将前端 block 保存与 node detail 查询接到真实 API
 - 初始化 git 仓库并准备 GitHub 发布
+- 手动下载并解压 JDK 21 与 Neo4j 社区版到 `Downloads/almanack-runtime`
+- 启动本地 Neo4j，确认 `7474/7687` 监听并设置初始密码
+- 完成真实持久化验证：服务层写入 `block-live-1`、API 写入 `block-api-1`，Cypher 可直接查询回读
+- 修复 dashboard `Storage mode: undefined` 问题，并通过 API 测试验证 `Storage mode: neo4j`
 
 ### 当前进行中
 
-- 本地 Neo4j 安装与 GitHub 发布
+- GitHub 发布
 
 ### 下一步
 
-- 完成本地 Neo4j 安装和真实持久化验证
 - 创建公开仓库 `Almanack` 并上传代码
-- 汇总第三阶段结果与阻塞
+- 汇总第三阶段结果与剩余发布事项

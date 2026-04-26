@@ -16,7 +16,8 @@ test("runs planner, retriever, critic in order and returns grounded fallback ans
               label: "AI-native OS",
               type: "Concept",
               confidence: 0.96,
-              summary: "系统核心定位"
+              summary: "系统核心定位",
+              metadata: { sourceIds: ["rss"] }
             }
           ]
         };
@@ -33,7 +34,8 @@ test("runs planner, retriever, critic in order and returns grounded fallback ans
 
   assert.deepEqual(result.steps.map((step) => step.agent), ["Planner", "Retriever", "Critic"]);
   assert.match(result.answer, /Summarize latest thesis/);
-  assert.equal(result.citations[0], "AI-native OS");
+  assert.equal(result.citations[0].label, "AI-native OS");
+  assert.equal(result.citations[0].sourceId, "rss");
   assert.equal(result.mode, "fallback");
 });
 

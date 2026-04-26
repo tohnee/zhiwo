@@ -52,4 +52,6 @@
 - `DeepSeek` 真实调用已成功返回结果，因此 live LLM 链路不是理论接入，而是已被实际验证。
 - `graph-service` 现已具备 Neo4j seed、summary 读取、editor block 保存、node detail 查询四类真实适配函数。
 - 前端 `Save Blocks` 与 graph node 点击现在通过 API 调用后端，而不再只是本地状态变更。
-- 当前未完成项主要是本地 Neo4j 安装与真实连通验证，不是代码结构缺失。
+- 本地 Neo4j 已通过手动 JDK 21 + 社区版 tarball 在 `Downloads/almanack-runtime` 启动，`bolt://localhost:7687` 与 `http://localhost:7474` 均已监听。
+- 已完成真实持久化验证：`graph-service` 可写入 `EditorBlock`，`api-gateway` 的 `/api/graph/node/n1` 可返回 `storageMode: neo4j` 的节点详情，Cypher 直接查询可读回 `block-live-1` 与 `block-api-1`。
+- 验证过程中发现 `api-gateway` dashboard 的 `debug.retrieval` 只读顶层 `storageMode`，会把 Neo4j summary 显示为 `undefined`；现已修复为回退读取节点 `metadata.storageMode`。

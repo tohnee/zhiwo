@@ -60,7 +60,7 @@
 
 - [complete] 配置 DeepSeek live 模式并完成真实调用验证
 - [complete] 将 Editor / Graph 持久化链路接入 `graph-service` 与 `api-gateway`
-- [in_progress] 初始化本地 Neo4j 环境并做真实持久化验证
+- [complete] 初始化本地 Neo4j 环境并做真实持久化验证
 - [in_progress] 初始化 git、验证并发布公开仓库 `Almanack`
 
 ## 风险与开放问题
@@ -68,8 +68,8 @@
 - 当前目录仅有设计文档，无现有代码，需要从零搭建。
 - 某些外部系统（Telegram、Neo4j、Qdrant、LLM）首版应以 mock 或占位实现代替，以保证项目可本地跑通。
 - 本机未安装 `docker`，因此只能交付 Compose 配置，不能完成容器级验证。
-- 第二阶段仍受真实凭据与本地 Neo4j 实例可用性影响，需要提供降级模式。
-- 当前 `DeepSeek` live 已验证可用；本地 `Neo4j` 真实连通验证仍受 Homebrew 安装耗时影响。
+- 第二阶段仍受 Telegram、RSS、PDF 等真实凭据或目录配置影响，需要继续保持降级模式。
+- 当前 `DeepSeek` live 与本地 `Neo4j` 真实持久化都已验证可用；Neo4j 通过手动 JDK + 社区版 tarball 在本地运行。
 
 ## 错误记录
 
@@ -79,3 +79,4 @@
 | `FastAPI` 依赖在 `Python 3.14` 环境安装受阻 | 1 | 切换到文档允许的 Node API Gateway 方案，优先保证 MVP 可运行 |
 | API Gateway 无法解析 workspace 包 | 1 | 为 `services/*` 添加 `exports`，为 `apps/api-gateway` 显式声明 workspace 依赖后重新安装 |
 | `brew install` 卡在自动更新与残留锁文件 | 1 | 关闭 `HOMEBREW_NO_AUTO_UPDATE` 重试，清理 `.incomplete` 文件并按单包安装排查 |
+| Neo4j 官方 tarball 通过命令行下载返回 `403` | 1 | 改由浏览器下载 JDK 与 Neo4j 压缩包，手动解压到 `Downloads/almanack-runtime` 后启动 |

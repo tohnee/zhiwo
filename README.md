@@ -1,6 +1,11 @@
-# KnowledgeOS MVP
+# zhiwo
 
-基于 `产品设计.md`、`monorepo拆解.md`、`UI设计参考.md` 构建的可运行 MVP。
+基于 `产品设计.md`、`monorepo拆解.md`、`UI设计参考.md` 构建的可运行知识工作台。
+
+## 手册
+
+- 完整安装、运行、测试与 `NotebookLM` 深度对比手册：
+  `docs/knowledgeos-install-run-test-manual-and-notebooklm-comparison.md`
 
 ## MVP 范围
 
