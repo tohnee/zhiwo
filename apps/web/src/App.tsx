@@ -17,7 +17,15 @@ import {
   loadSourceDocument,
   saveAnswerToNote,
   saveNoteDocument,
-  sendChatPrompt
+  sendChatPrompt,
+  rerunChatWithParameters,
+  generateMarkdownReport,
+  generatePptDeck,
+  ingestImEvent,
+  loadDebugRuns,
+  loadDebugDiff,
+  setDebugBaseline,
+  syncConnectors
 } from "./lib/api";
 import { mockDashboardData } from "./data/mock";
 
@@ -109,6 +117,17 @@ export default function App() {
     | "infographic"
     | "data-table"
   >("audio-overview");
+  const [debugParams, setDebugParams] = useState({ retrievalTopK: 3, temperature: 0.2, forceLive: false });
+  const [debugAudit, setDebugAudit] = useState<{ baselineRunId: string | null; runCount: number; diffSummary: string }>({
+    baselineRunId: null,
+    runCount: 0,
+    diffSummary: "No diff loaded"
+  });
+  const [syncingConnector, setSyncingConnector] = useState<string>("");
+  const [syncSummary, setSyncSummary] = useState<string>("");
+  const [syncSince, setSyncSince] = useState<string>("");
+  const [syncLimit, setSyncLimit] = useState<string>("50");
+  const [syncDryRun, setSyncDryRun] = useState<boolean>(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -287,6 +306,26 @@ export default function App() {
     setRightPanel("reader");
   };
 
+
+  const syncSources = async (connector?: string) => {
+    setSyncingConnector(connector ?? "all");
+    try {
+      const parsedLimit = Number(syncLimit);
+      const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.floor(parsedLimit) : undefined;
+      const result = await syncConnectors({ connector, since: syncSince || undefined, limit, dryRun: syncDryRun });
+      const blocked = result.snapshots.filter((snapshot) => snapshot.readiness === "blocked").length;
+      setSyncSummary(
+        `Sync done: total=${result.summary.total}, success=${result.summary.success}, degraded=${result.summary.degraded}, dryRun=${result.summary.requested?.dryRun ? "yes" : "no"}, blocked=${blocked}, duration=${result.summary.durationMs ?? 0}ms`
+      );
+      const data = await loadDashboardData();
+      setDashboard(data);
+    } catch (error) {
+      setSyncSummary(error instanceof Error ? `Sync failed: ${error.message}` : "Sync failed");
+    } finally {
+      setSyncingConnector("");
+    }
+  };
+
   const submitPrompt = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
     const prompt = composerValue.trim();
@@ -307,6 +346,81 @@ export default function App() {
         citations: result.citations
       }
     ]);
+  };
+
+
+  const rerunWithDebugParams = async () => {
+    const prompt = composerValue.trim() || conversation.at(-1)?.content || "Summarize latest signals";
+    const result = await rerunChatWithParameters({
+      prompt,
+      retrievalTopK: debugParams.retrievalTopK,
+      temperature: debugParams.temperature,
+      forceLive: debugParams.forceLive,
+      outputFormat: "chat"
+    });
+
+    setConversation((current) => [
+      ...current,
+      {
+        role: "assistant",
+        content: result.answer,
+        citations: result.citations
+      }
+    ]);
+  };
+
+  const runImIngestionDemo = async () => {
+    await ingestImEvent({
+      source: "telegram",
+      sender: "demo-user",
+      text: "Board Decision not aligned with Revenue Forecast"
+    });
+    const data = await loadDashboardData();
+    setDashboard(data);
+  };
+
+  const generateReportToNotes = async () => {
+    const topic = composerValue.trim() || "KnowledgeOS board report";
+    await generateMarkdownReport(topic);
+    const data = await loadDashboardData();
+    setDashboard(data);
+  };
+
+  const generatePptToNotes = async () => {
+    const topic = composerValue.trim() || "KnowledgeOS board deck";
+    await generatePptDeck(topic);
+    const data = await loadDashboardData();
+    setDashboard(data);
+  };
+
+
+  const refreshDebugAudit = async () => {
+    const runs = await loadDebugRuns();
+    const latest = runs.runs.at(-1);
+    const baseline = runs.runs.find((run) => run.id === runs.baselineRunId) ?? runs.runs[0];
+
+    let diffSummary = "No comparable runs";
+    if (baseline?.id && latest?.id && baseline.id !== latest.id) {
+      const diff = await loadDebugDiff(baseline.id, latest.id);
+      diffSummary = `Δcitations ${diff.diff.citationDelta}, Δanswer ${diff.diff.answerLengthDelta}`;
+    }
+
+    setDebugAudit({
+      baselineRunId: runs.baselineRunId,
+      runCount: runs.runs.length,
+      diffSummary
+    });
+  };
+
+  const setLatestAsBaseline = async () => {
+    const runs = await loadDebugRuns();
+    const latest = runs.runs.at(-1);
+    if (!latest) {
+      return;
+    }
+
+    await setDebugBaseline(latest.id);
+    await refreshDebugAudit();
   };
 
   const flattenedFolders = useMemo(() => {
@@ -499,17 +613,27 @@ export default function App() {
           </div>
           <div className="mt-4 rounded-[24px] border border-black/5 bg-white p-4 shadow-sm">
             <p className="text-lg font-semibold text-slate-900">Sources</p>
-            <p className="mt-1 text-sm text-slate-500">{dashboard.sources.length} loaded</p>
+            <div className="mt-1 flex items-center justify-between gap-2 text-sm text-slate-500"><span>{dashboard.sources.length} loaded</span><button className="rounded-full border border-black/10 bg-[#faf8f4] px-3 py-1 text-xs" onClick={() => { void syncSources(); }} type="button">{syncingConnector === "all" ? "Syncing..." : "Sync All"}</button></div>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-500">
+              <label className="flex flex-col gap-1">
+                <span>Since (ISO)</span>
+                <input className="rounded-lg border border-black/10 px-2 py-1" onChange={(event) => setSyncSince(event.target.value)} placeholder="2026-04-26T00:00:00.000Z" value={syncSince} />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span>Limit</span>
+                <input className="rounded-lg border border-black/10 px-2 py-1" min={1} onChange={(event) => setSyncLimit(event.target.value)} type="number" value={syncLimit} />
+              </label>
+            </div>
+            <label className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+              <input checked={syncDryRun} onChange={(event) => setSyncDryRun(event.target.checked)} type="checkbox" />
+              Dry run (validate only)
+            </label>
             <div className="mt-4 space-y-3">
               {dashboard.sources.map((source) => (
-                <button
+                <div
                   aria-label={source.name}
                   className="w-full rounded-2xl border border-black/5 bg-[#faf8f4] p-4 text-left transition hover:bg-white"
                   key={source.id}
-                  onClick={() => {
-                    void openSourceReader(source.id);
-                  }}
-                  type="button"
                 >
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="font-medium text-slate-900">{source.name}</h3>
@@ -517,9 +641,16 @@ export default function App() {
                   </div>
                   <p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{source.status}</p>
                   <p className="mt-2 text-sm text-slate-500">{source.count} items</p>
-                </button>
+                  <p className="mt-1 text-xs text-slate-400">{source.detail}</p>
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <button className="rounded-full border border-black/10 bg-white px-3 py-1 text-xs text-slate-600" onClick={() => { void syncSources(source.kind); }} type="button">{syncingConnector === source.kind ? "Syncing..." : "Sync"}</button>
+                    <button aria-label={source.name} className="rounded-full border border-black/10 bg-white px-3 py-1 text-xs text-slate-600" onClick={() => { void openSourceReader(source.id); }} type="button">Open</button>
+                    <span className="text-xs text-slate-400">cursor: {source.nextCursor ?? "-"}</span>
+                  </div>
+                </div>
               ))}
             </div>
+            {syncSummary ? <p className="mt-3 text-xs text-slate-500">{syncSummary}</p> : null}
           </div>
 
           <div className="mt-5 rounded-[24px] border border-black/5 bg-white p-4 shadow-sm">
@@ -538,6 +669,7 @@ export default function App() {
                 </button>
               ))}
             </div>
+            {syncSummary ? <p className="mt-3 text-xs text-slate-500">{syncSummary}</p> : null}
           </div>
 
           <div className="mt-5 rounded-[24px] border border-black/5 bg-white p-4 shadow-sm">
@@ -652,6 +784,17 @@ export default function App() {
                       <p className="mt-2 text-sm text-slate-500">{item.detail}</p>
                     </div>
                   ))}
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button className="rounded-full border border-black/10 bg-white px-3 py-2 text-sm text-slate-700" onClick={() => { void runImIngestionDemo(); }} type="button">
+                    IM Event → Graph
+                  </button>
+                  <button className="rounded-full border border-black/10 bg-white px-3 py-2 text-sm text-slate-700" onClick={() => { void generateReportToNotes(); }} type="button">
+                    Generate Markdown Report
+                  </button>
+                  <button className="rounded-full border border-black/10 bg-white px-3 py-2 text-sm text-slate-700" onClick={() => { void generatePptToNotes(); }} type="button">
+                    Generate PPT Deck
+                  </button>
                 </div>
               </>
             ) : null}
@@ -779,6 +922,24 @@ export default function App() {
                 type="submit"
               >
                 Send
+              </button>
+              <button
+                className="rounded-full border border-black/10 bg-white px-5 py-3 text-sm font-medium text-slate-700"
+                onClick={() => {
+                  void rerunWithDebugParams();
+                }}
+                type="button"
+              >
+                Rerun
+              </button>
+              <button
+                className="rounded-full border border-black/10 bg-white px-5 py-3 text-sm font-medium text-slate-700"
+                onClick={() => {
+                  void refreshDebugAudit();
+                }}
+                type="button"
+              >
+                Load Diff
               </button>
             </div>
           </form>
@@ -1017,6 +1178,20 @@ export default function App() {
 
           <section className="mt-6 rounded-2xl border border-black/5 bg-white p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">AI Debug</h3>
+            <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+              <label className="space-y-1 text-slate-500">
+                <span>TopK</span>
+                <input className="w-full rounded-xl border border-black/10 px-2 py-1" type="number" min={1} value={debugParams.retrievalTopK} onChange={(event) => setDebugParams((current) => ({ ...current, retrievalTopK: Number(event.target.value) }))} />
+              </label>
+              <label className="space-y-1 text-slate-500">
+                <span>Temp</span>
+                <input className="w-full rounded-xl border border-black/10 px-2 py-1" type="number" step="0.1" min={0} max={1} value={debugParams.temperature} onChange={(event) => setDebugParams((current) => ({ ...current, temperature: Number(event.target.value) }))} />
+              </label>
+              <label className="flex items-end gap-2 rounded-xl border border-black/10 bg-[#faf8f4] px-2 py-1 text-slate-500">
+                <input type="checkbox" checked={debugParams.forceLive} onChange={(event) => setDebugParams((current) => ({ ...current, forceLive: event.target.checked }))} />
+                <span>Force Live</span>
+              </label>
+            </div>
             <ul className="mt-3 space-y-2">
               {dashboard.debug.agentSteps.map((step) => (
                 <li className="rounded-2xl border border-black/5 bg-[#faf8f4] p-3 text-sm text-slate-700" key={step}>
@@ -1033,6 +1208,14 @@ export default function App() {
               {dashboard.debug.reasoning.map((item) => (
                 <p key={item}>{item}</p>
               ))}
+            </div>
+            <div className="mt-4 rounded-2xl border border-black/5 bg-[#faf8f4] p-3 text-xs text-slate-600">
+              <p>Baseline: {debugAudit.baselineRunId ?? "none"}</p>
+              <p>Runs: {debugAudit.runCount}</p>
+              <p>{debugAudit.diffSummary}</p>
+              <button className="mt-2 rounded-full border border-black/10 bg-white px-3 py-1" onClick={() => { void setLatestAsBaseline(); }} type="button">
+                Set latest as baseline
+              </button>
             </div>
           </section>
         </aside>

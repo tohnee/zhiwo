@@ -1,5 +1,28 @@
 import { mockDashboardData } from "../data/mock";
 
+export interface ConnectorCatalogItem {
+  id: string;
+  name: string;
+  kind: string;
+  syncMode: string;
+  status: string;
+}
+
+export interface ConnectorSyncSnapshot {
+  kind: string;
+  mode: string;
+  readiness?: "ready" | "blocked";
+  cursor: string | number | null;
+  lastSyncedAt?: string | null;
+  items: unknown[];
+  reason?: string;
+  error?: string | null;
+  stats?: {
+    count: number;
+    durationMs: number;
+  };
+}
+
 export interface SourceItem {
   id: string;
   name: string;
@@ -8,6 +31,9 @@ export interface SourceItem {
   mode: string;
   detail: string;
   count: number;
+  lastSyncedAt?: string;
+  nextCursor?: string | number | null;
+  error?: string | null;
 }
 
 export interface GraphNode {
@@ -77,6 +103,43 @@ export interface ChatResponse {
   mode: string;
   steps: string[];
   citations: Citation[];
+}
+
+
+export interface AgentRunParameters {
+  retrievalTopK: number;
+  temperature: number;
+  forceLive: boolean;
+  outputFormat: string;
+}
+
+export interface ChatReplayResponse {
+  answer: string;
+  mode: string;
+  parameters: AgentRunParameters;
+  steps: Array<{ agent: string; intent?: string; output?: unknown }>;
+  citations: Citation[];
+}
+
+export interface DebugRunRecord {
+  id: string;
+  prompt: string;
+  answer: string;
+  mode: string;
+  createdAt: string;
+  parameters: AgentRunParameters;
+}
+
+export interface GeneratedArtifactResponse {
+  saved: {
+    artifact: {
+      id: string;
+      format: string;
+      title: string;
+      content: string;
+      citations: Citation[];
+    };
+  };
 }
 
 export interface DashboardData {
@@ -251,4 +314,189 @@ export async function sendChatPrompt(prompt: string): Promise<ChatResponse> {
   }
 
   return (await response.json()) as ChatResponse;
+}
+
+
+export async function rerunChatWithParameters(input: {
+  prompt: string;
+  retrievalTopK?: number;
+  temperature?: number;
+  forceLive?: boolean;
+  outputFormat?: string;
+}): Promise<ChatReplayResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/chat/rerun`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Chat rerun failed: ${response.status}`);
+  }
+
+  return (await response.json()) as ChatReplayResponse;
+}
+
+export async function ingestImEvent(input: {
+  source: string;
+  threadId?: string;
+  sender?: string;
+  text: string;
+  occurredAt?: string;
+}): Promise<{ queued: string; processed: number }> {
+  const response = await fetch(`${API_BASE_URL}/api/ingest/im-event`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw new Error(`IM ingest failed: ${response.status}`);
+  }
+
+  return (await response.json()) as { queued: string; processed: number };
+}
+
+export async function generateMarkdownReport(topic: string): Promise<GeneratedArtifactResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/generate/report-markdown`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topic })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Report generation failed: ${response.status}`);
+  }
+
+  return (await response.json()) as GeneratedArtifactResponse;
+}
+
+export async function generatePptDeck(topic: string): Promise<GeneratedArtifactResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/generate/ppt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topic })
+  });
+
+  if (!response.ok) {
+    throw new Error(`PPT generation failed: ${response.status}`);
+  }
+
+  return (await response.json()) as GeneratedArtifactResponse;
+}
+
+
+export async function loadDebugRuns(): Promise<{ baselineRunId: string | null; runs: DebugRunRecord[] }> {
+  const response = await fetch(`${API_BASE_URL}/api/debug/runs`);
+
+  if (!response.ok) {
+    throw new Error(`Load debug runs failed: ${response.status}`);
+  }
+
+  return (await response.json()) as { baselineRunId: string | null; runs: DebugRunRecord[] };
+}
+
+export async function loadDebugDiff(from: string, to: string): Promise<{
+  diff: {
+    from: string | null;
+    to: string | null;
+    citationDelta: number;
+    answerLengthDelta: number;
+  };
+}> {
+  const response = await fetch(`${API_BASE_URL}/api/debug/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+
+  if (!response.ok) {
+    throw new Error(`Load debug diff failed: ${response.status}`);
+  }
+
+  return (await response.json()) as {
+    diff: {
+      from: string | null;
+      to: string | null;
+      citationDelta: number;
+      answerLengthDelta: number;
+    };
+  };
+}
+
+export async function setDebugBaseline(runId: string): Promise<{ baselineRunId: string }> {
+  const response = await fetch(`${API_BASE_URL}/api/debug/baseline`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runId })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Set debug baseline failed: ${response.status}`);
+  }
+
+  return (await response.json()) as { baselineRunId: string };
+}
+
+
+export async function loadConnectorCatalog(): Promise<{ connectors: ConnectorCatalogItem[] }> {
+  const response = await fetch(`${API_BASE_URL}/api/connectors/catalog`);
+
+  if (!response.ok) {
+    throw new Error(`Load connector catalog failed: ${response.status}`);
+  }
+
+  return (await response.json()) as { connectors: ConnectorCatalogItem[] };
+}
+
+export async function syncConnectors(input: {
+  connector?: string;
+  cursor?: string | number | null;
+  since?: string;
+  limit?: number;
+  dryRun?: boolean;
+} = {}): Promise<{
+  snapshots: ConnectorSyncSnapshot[];
+  summary: {
+    requested?: {
+      connector: string | null;
+      cursor: string | number | null;
+      since: string | null;
+      limit: number | null;
+      dryRun: boolean;
+    };
+    total: number;
+    success: number;
+    degraded: number;
+    failed: number;
+    startedAt?: string;
+    completedAt?: string;
+    durationMs?: number;
+  };
+}> {
+  const response = await fetch(`${API_BASE_URL}/api/connectors/sync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Sync connectors failed: ${response.status}`);
+  }
+
+  return (await response.json()) as {
+    snapshots: ConnectorSyncSnapshot[];
+    summary: {
+      requested?: {
+        connector: string | null;
+        cursor: string | number | null;
+        since: string | null;
+        limit: number | null;
+        dryRun: boolean;
+      };
+      total: number;
+      success: number;
+      degraded: number;
+      failed: number;
+      startedAt?: string;
+      completedAt?: string;
+      durationMs?: number;
+    };
+  };
 }

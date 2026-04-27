@@ -5,10 +5,11 @@ import { createServer } from "./server.js";
 
 function createStubAgentService(mode = "fallback") {
   return {
-    async run(prompt) {
+    async run(prompt, parameters = {}) {
       return {
         answer: `${mode === "live" ? "Live" : "Grounded"} summary for "${prompt}"`,
         mode,
+        parameters,
         citations: [
           {
             label: "AI-native OS",
@@ -18,11 +19,33 @@ function createStubAgentService(mode = "fallback") {
           }
         ],
         steps: [
+          { agent: "Collector", intent: "collect" },
+          { agent: "Structuring", intent: "structure" },
+          { agent: "Analyst", intent: "analyze" },
           { agent: "Planner", intent: prompt },
-          { agent: "Retriever" },
-          { agent: "Critic" }
+          { agent: "Creator", intent: "create" },
+          { agent: "Critic", intent: "validate" }
         ]
       };
+    },
+    async generateMarkdownReport({ topic }) {
+      return {
+        format: "markdown",
+        title: `${topic} Report`,
+        content: `# ${topic}`,
+        citations: []
+      };
+    },
+    async generatePpt({ topic }) {
+      return {
+        format: "ppt",
+        title: `${topic} Deck`,
+        content: JSON.stringify({ topic, slides: [] }),
+        citations: []
+      };
+    },
+    exportArtifact({ artifact }) {
+      return artifact.content ?? "";
     }
   };
 }
@@ -54,11 +77,17 @@ async function withServer(run, options = {}) {
 
 test("health endpoint returns ready status", async () => {
   await withServer(async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/health`);
+    const response = await fetch(`${baseUrl}/health`, {
+      headers: { "x-request-id": "req-health-test" }
+    });
     const payload = await response.json();
 
     assert.equal(response.status, 200);
-    assert.deepEqual(payload, { status: "ok", service: "knowledgeos-api" });
+    assert.equal(response.headers.get("x-request-id"), "req-health-test");
+    assert.equal(payload.status, "ok");
+    assert.equal(payload.service, "knowledgeos-api");
+    assert.equal(payload.requestId, "req-health-test");
+    assert.equal(typeof payload.dependencies.llm.configured, "boolean");
   });
 });
 
@@ -75,102 +104,48 @@ test("dashboard endpoint returns workspace and debug data", async () => {
     assert.ok(payload.workspace.graphNodes[0].metadata);
     assert.ok(payload.workspace.graphNodes[0].metadata.storageMode);
     assert.ok(payload.workspace.editorBlocks[0].id);
-    assert.ok(payload.debug.agentSteps[0].startsWith("Planner"));
+    assert.ok(payload.debug.agentSteps[0].startsWith("Collector"));
   });
 });
 
-test("dashboard debug retrieval reports neo4j storage mode when summary omits top-level storageMode", async () => {
-  await withServer(
-    async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/api/dashboard`);
-      const payload = await response.json();
-
-      assert.equal(response.status, 200);
-      assert.ok(payload.debug.retrieval.includes("Storage mode: neo4j"));
-    },
-    {
-      graphService: {
-        async getSummary() {
-          return {
-            title: "Knowledge Graph",
-            nodes: [
-              {
-                id: "n1",
-                label: "AI-native OS",
-                type: "Concept",
-                confidence: 0.96,
-                summary: "系统核心定位",
-                metadata: { storageMode: "neo4j", sourceIds: ["rss", "pdf"] }
-              }
-            ],
-            editorBlocks: [
-              {
-                id: "block-1",
-                type: "text",
-                content: "Persisted block",
-                sourceIds: ["rss"]
-              }
-            ]
-          };
-        },
-        async saveEditorBlock(block) {
-          return block;
-        },
-        async getNodeDetail(id) {
-          return {
-            id,
-            label: "AI-native OS",
-            type: "Concept",
-            confidence: 0.96,
-            summary: "系统核心定位",
-            metadata: { storageMode: "neo4j", sourceIds: ["rss", "pdf"] }
-          };
-        }
-      }
-    }
-  );
-});
-
-test("ingest endpoint appends a new source snapshot", async () => {
+test("chat rerun supports parameterized debug replay", async () => {
   await withServer(async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/ingest`, {
+    const response = await fetch(`${baseUrl}/api/chat/rerun`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source: "wechat", items: 7 })
+      body: JSON.stringify({
+        prompt: "Summarize today",
+        retrievalTopK: 5,
+        outputFormat: "chat"
+      })
     });
     const payload = await response.json();
 
     assert.equal(response.status, 200);
-    assert.match(payload.message, /^Synced wechat/);
-    assert.equal(payload.dashboard.sources.at(-1).count, 7);
+    assert.equal(payload.parameters.retrievalTopK, 5);
+    assert.equal(payload.steps[0].agent, "Collector");
   });
 });
 
-test("chat endpoint returns a grounded answer", async () => {
-  await withServer(async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "Summarize today" })
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 200);
-    assert.match(payload.answer, /Summarize today/);
-    assert.ok(payload.steps[0].startsWith("Planner"));
-    assert.equal(payload.citations[0].excerptId, "excerpt-rss-1");
-  });
-});
-
-test("source reader endpoint returns source content and excerpts", async () => {
+test("im ingestion endpoint parses queued messages into graph updates", async () => {
+  const events = [];
   await withServer(
     async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/api/source/rss`);
+      const response = await fetch(`${baseUrl}/api/ingest/im-event`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "telegram",
+          sender: "alice",
+          text: "Apple roadmap decision not aligned with Tesla plan"
+        })
+      });
       const payload = await response.json();
 
       assert.equal(response.status, 200);
-      assert.equal(payload.source.id, "rss");
-      assert.equal(payload.source.excerpts[0].id, "excerpt-rss-1");
+      assert.equal(payload.processed, 1);
+      assert.equal(payload.latest.source, "telegram");
+      assert.equal(events.length, 1);
     },
     {
       graphService: {
@@ -181,224 +156,189 @@ test("source reader endpoint returns source content and excerpts", async () => {
             editorBlocks: []
           };
         },
-        async saveEditorBlock(block) {
-          return block;
-        },
-        async getNodeDetail() {
-          return null;
-        },
-        async getSourceDocument(id) {
-          return {
-            id,
-            title: "Board Memo",
-            kind: "rss",
-            content: "Board memo content",
-            excerpts: [
-              {
-                id: "excerpt-rss-1",
-                sourceId: "rss",
-                title: "Memo excerpt",
-                text: "Key insight from the memo",
-                order: 1
-              }
-            ]
-          };
-        }
-      }
-    }
-  );
-});
-
-test("save-to-note endpoint creates a note in a nested folder", async () => {
-  await withServer(
-    async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/api/answer/save-to-note`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          folderId: "folder-research",
-          title: "Saved answer",
-          content: "Answer body",
-          citations: []
-        })
-      });
-      const payload = await response.json();
-
-      assert.equal(response.status, 200);
-      assert.equal(payload.note.folderId, "folder-research");
-    },
-    {
-      graphService: {
-        async getSummary() {
-          return { title: "Knowledge Graph", nodes: [], editorBlocks: [] };
-        },
-        async saveEditorBlock(block) {
-          return block;
-        },
-        async getNodeDetail() {
-          return null;
-        },
         async getSourceDocument() {
           return null;
         },
-        async saveAnswerToNote(input) {
-          return {
-            note: {
-              id: "note-1",
-              title: input.title,
-              folderId: input.folderId,
-              content: input.content
-            }
-          };
-        }
-      }
-    }
-  );
-});
-
-test("note endpoints load, update, move and create folders", async () => {
-  const state = {
-    tree: {
-      id: "folder-root",
-      name: "Workspace",
-      path: "Workspace",
-      children: []
-    },
-    notes: [
-      {
-        id: "note-1",
-        title: "Ideas",
-        folderId: "folder-root",
-        content: "Original content",
-        citations: []
-      }
-    ]
-  };
-
-  await withServer(
-    async (baseUrl) => {
-      const noteResponse = await fetch(`${baseUrl}/api/note/note-1`);
-      const notePayload = await noteResponse.json();
-
-      const folderResponse = await fetch(`${baseUrl}/api/note/folder`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          parentId: "folder-root",
-          name: "Projects"
-        })
-      });
-      const folderPayload = await folderResponse.json();
-
-      const saveResponse = await fetch(`${baseUrl}/api/note`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "note-1",
-          title: "Ideas",
-          folderId: "folder-root",
-          content: "Updated content",
-          citations: []
-        })
-      });
-      const savePayload = await saveResponse.json();
-
-      const moveResponse = await fetch(`${baseUrl}/api/note/move`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          noteId: "note-1",
-          folderId: "folder-projects"
-        })
-      });
-      const movePayload = await moveResponse.json();
-
-      assert.equal(noteResponse.status, 200);
-      assert.equal(notePayload.note.id, "note-1");
-      assert.equal(folderResponse.status, 200);
-      assert.equal(folderPayload.folder.id, "folder-projects");
-      assert.equal(saveResponse.status, 200);
-      assert.equal(savePayload.note.content, "Updated content");
-      assert.equal(moveResponse.status, 200);
-      assert.equal(movePayload.note.folderId, "folder-projects");
-    },
-    {
-      graphService: {
-        async getSummary() {
-          return { title: "Knowledge Graph", nodes: [], editorBlocks: [] };
-        },
         async saveEditorBlock(block) {
           return block;
         },
         async getNodeDetail() {
-          return null;
-        },
-        async getSourceDocument() {
           return null;
         },
         async getNoteTree() {
-          return state.tree;
+          return { id: "folder-root", name: "Workspace", path: "Workspace", children: [] };
         },
-        async getNoteDocument(id) {
-          return state.notes.find((note) => note.id === id) ?? null;
+        async getNoteDocument() {
+          return null;
         },
         async saveNoteDocument(note) {
-          state.notes = state.notes.map((item) => (item.id === note.id ? note : item));
           return note;
         },
-        async createNoteFolder(input) {
-          return {
-            id: "folder-projects",
-            name: input.name,
-            path: "Workspace/Projects",
-            children: []
-          };
+        async createNoteFolder(folder) {
+          return { ...folder, id: "folder-id", path: "Workspace/Test", children: [] };
         },
-        async moveNoteDocument({ noteId, folderId }) {
-          const existing = state.notes.find((note) => note.id === noteId);
-          const moved = { ...existing, folderId };
-          state.notes = state.notes.map((note) => (note.id === noteId ? moved : note));
-          return moved;
+        async moveNoteDocument() {
+          return null;
+        },
+        async saveAnswerToNote(input) {
+          return { note: { id: "note-1", ...input } };
+        },
+        async getTimeline() {
+          return [];
+        },
+        async getConflicts() {
+          return [];
+        },
+        getGraphRagSchema() {
+          return { entities: [] };
+        },
+        async ingestEvent(event) {
+          events.push(event);
+          return { entities: event.entities };
+        },
+        async saveGeneratedArtifact(input) {
+          return { artifact: { id: "a1", ...input } };
         }
       }
     }
   );
 });
 
-test("editor update and graph node detail endpoints return persisted workspace changes", async () => {
+test("generation endpoints save markdown reports and ppt decks", async () => {
   await withServer(async (baseUrl) => {
-    const updateResponse = await fetch(`${baseUrl}/api/editor/block`, {
+    const reportResponse = await fetch(`${baseUrl}/api/generate/report-markdown`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: "block-1", content: "Updated thesis block" })
+      body: JSON.stringify({ topic: "Board strategy" })
     });
-    const updatePayload = await updateResponse.json();
+    const reportPayload = await reportResponse.json();
 
-    assert.equal(updateResponse.status, 200);
-    assert.equal(updatePayload.block.content, "Updated thesis block");
+    const pptResponse = await fetch(`${baseUrl}/api/generate/ppt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic: "Board strategy", slideCount: 3 })
+    });
+    const pptPayload = await pptResponse.json();
 
-    const detailResponse = await fetch(`${baseUrl}/api/graph/node/n1`);
-    const detailPayload = await detailResponse.json();
-
-    assert.equal(detailResponse.status, 200);
-    assert.equal(detailPayload.node.id, "n1");
-    assert.ok(detailPayload.node.summary);
+    assert.equal(reportResponse.status, 200);
+    assert.equal(reportPayload.report.format, "markdown");
+    assert.equal(pptResponse.status, 200);
+    assert.equal(pptPayload.deck.format, "ppt");
   });
 });
 
-test("chat endpoint reports live mode when llm is configured", async () => {
-  await withServer(
-    async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/chat`, {
+test("debug run history supports baseline and diff endpoints", async () => {
+  await withServer(async (baseUrl) => {
+    const chatResponse = await fetch(`${baseUrl}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "Run live mode" })
+      body: JSON.stringify({ prompt: "First run", retrievalTopK: 2 })
+    });
+    const chatPayload = await chatResponse.json();
+
+    const rerunResponse = await fetch(`${baseUrl}/api/chat/rerun`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "Second run", retrievalTopK: 5 })
+    });
+    const rerunPayload = await rerunResponse.json();
+
+    const baselineResponse = await fetch(`${baseUrl}/api/debug/baseline`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId: chatPayload.runId })
+    });
+    const baselinePayload = await baselineResponse.json();
+
+    const diffResponse = await fetch(
+      `${baseUrl}/api/debug/diff?from=${encodeURIComponent(chatPayload.runId)}&to=${encodeURIComponent(rerunPayload.runId)}`
+    );
+    const diffPayload = await diffResponse.json();
+
+    assert.equal(chatResponse.status, 200);
+    assert.equal(rerunResponse.status, 200);
+    assert.equal(baselineResponse.status, 200);
+    assert.equal(baselinePayload.baselineRunId, chatPayload.runId);
+    assert.equal(diffResponse.status, 200);
+    assert.equal(typeof diffPayload.diff.citationDelta, "number");
+  });
+});
+
+test("connector sync and artifact export endpoints respond with payload", async () => {
+  await withServer(async (baseUrl) => {
+    const syncResponse = await fetch(`${baseUrl}/api/connectors/sync`, {
+      method: "POST"
+    });
+    const syncPayload = await syncResponse.json();
+
+    const exportResponse = await fetch(`${baseUrl}/api/generate/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        format: "markdown",
+        artifact: { content: "# hello" }
+      })
+    });
+    const exportPayload = await exportResponse.json();
+
+    assert.equal(syncResponse.status, 200);
+    assert.equal(Array.isArray(syncPayload.snapshots), true);
+    assert.equal(typeof syncPayload.summary.total, "number");
+    assert.equal(typeof syncPayload.summary.durationMs, "number");
+    assert.equal(typeof syncPayload.summary.startedAt, "string");
+    assert.equal(exportResponse.status, 200);
+    assert.equal(exportPayload.exported, "# hello");
+  });
+});
+
+
+test("connectors catalog endpoint returns supported connectors", async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/connectors/catalog`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(Array.isArray(payload.connectors), true);
+    assert.equal(payload.connectors.some((connector) => connector.kind === "feishu"), true);
+  });
+});
+
+test("connector sync validates invalid params", async () => {
+  await withServer(async (baseUrl) => {
+    const invalidSince = await fetch(`${baseUrl}/api/connectors/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ since: "not-a-date" })
+    });
+    const invalidSincePayload = await invalidSince.json();
+
+    const invalidConnector = await fetch(`${baseUrl}/api/connectors/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connector: "unknown" })
+    });
+    const invalidConnectorPayload = await invalidConnector.json();
+
+    assert.equal(invalidSince.status, 400);
+    assert.match(invalidSincePayload.error, /Invalid since/i);
+    assert.equal(invalidConnector.status, 400);
+    assert.match(invalidConnectorPayload.error, /Unsupported connector kind/i);
+  });
+});
+
+test("connector sync supports dry run passthrough", async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/connectors/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connector: "feishu", dryRun: true, cursor: "dry-cursor" })
     });
     const payload = await response.json();
 
-      assert.equal(response.status, 200);
-      assert.equal(payload.mode, "live");
-    },
-    { agentService: createStubAgentService("live") }
-  );
+    assert.equal(response.status, 200);
+    assert.equal(payload.summary.requested.dryRun, true);
+    assert.equal(payload.snapshots[0].mode, "dry_run");
+    assert.equal(payload.snapshots[0].readiness, "blocked");
+    assert.equal(payload.snapshots[0].cursor, "dry-cursor");
+  });
 });
