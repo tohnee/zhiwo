@@ -24,6 +24,30 @@
 
 ## 启动
 
+### 一键初始化（推荐）
+
+```bash
+bash scripts/bootstrap.sh
+```
+
+或使用：
+
+```bash
+make setup
+```
+
+常用工程命令：
+
+```bash
+make check          # 测试 + 构建
+make env-validate   # 校验 .env.local（缺失给 warning）
+make env-report     # 生成环境验收报告 artifacts/env-report.{json,md}
+make preflight      # 发布前检查，输出 artifacts/release-preflight-report.md
+make up             # docker compose 启动（若本机支持）
+make down           # docker compose 停止
+make health         # 运行时健康检查
+```
+
 ### 安装依赖
 
 ```bash
@@ -58,6 +82,9 @@ pnpm --filter web dev --host 0.0.0.0
 ## 验证
 
 ```bash
+make check
+
+# 或手动执行：
 node --test services/ingestion-service/src/index.test.js
 node --test services/graph-service/src/index.test.js
 node --test services/agent-service/src/index.test.js

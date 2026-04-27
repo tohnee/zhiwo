@@ -1,10 +1,14 @@
 export function createRetriever({ graphService, ingestionService }) {
   return {
-    async run(plan) {
-      const [graphSummary, sources, sourceDocuments] = await Promise.all([
+    async run(plan, parameters = {}) {
+      const retrievalTopK = Number(parameters.retrievalTopK ?? 3);
+      const [graphSummary, sources, sourceDocuments, timeline, conflicts, relations] = await Promise.all([
         graphService.getSummary(),
         ingestionService.listSources(),
-        typeof graphService.listSourceDocuments === "function" ? graphService.listSourceDocuments() : []
+        typeof graphService.listSourceDocuments === "function" ? graphService.listSourceDocuments() : [],
+        typeof graphService.getTimeline === "function" ? graphService.getTimeline(retrievalTopK) : [],
+        typeof graphService.getConflicts === "function" ? graphService.getConflicts() : [],
+        typeof graphService.getRelations === "function" ? graphService.getRelations(retrievalTopK) : []
       ]);
       const citations =
         sourceDocuments.length > 0
@@ -16,7 +20,7 @@ export function createRetriever({ graphService, ingestionService }) {
                 preview: excerpt.text
               }))
             )
-          : graphSummary.nodes.slice(0, 3).map((node) => ({
+          : graphSummary.nodes.slice(0, 5).map((node) => ({
               label: node.label,
               sourceId: node.metadata?.sourceIds?.[0] ?? "graph",
               excerptId: `excerpt-${node.id}`,
@@ -28,7 +32,10 @@ export function createRetriever({ graphService, ingestionService }) {
         plan,
         graphSummary,
         sources,
-        citations
+        citations,
+        timeline,
+        conflicts,
+        relations
       };
     }
   };

@@ -7,6 +7,8 @@ import {
   loadNoteDocument,
   loadSourceDocument,
   moveNoteDocument,
+  loadConnectorCatalog,
+  syncConnectors,
   saveEditorBlock,
   saveNoteDocument,
   sendChatPrompt
@@ -269,3 +271,60 @@ describe("loadDashboardData", () => {
     expect(result.folderId).toBe("folder-projects");
   });
 });
+
+
+  it("loads connector catalog through the API", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          connectors: [{ id: "feishu", name: "Feishu", kind: "feishu", syncMode: "polling", status: "needs_configuration" }]
+        })
+      })
+    );
+
+    const result = await loadConnectorCatalog();
+
+    expect(result.connectors[0].kind).toBe("feishu");
+  });
+
+  it("syncs connectors with connector-specific options", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          snapshots: [{ kind: "feishu", mode: "dry_run", readiness: "blocked", cursor: "c2", items: [], lastSyncedAt: "2026-04-26T00:00:00.000Z" }],
+          summary: {
+            requested: { connector: "feishu", cursor: "c1", since: null, limit: 50, dryRun: true },
+            total: 1,
+            success: 1,
+            degraded: 0,
+            failed: 0,
+            durationMs: 12
+          }
+        })
+      })
+    );
+
+    const result = await syncConnectors({ connector: "feishu", cursor: "c1", dryRun: true });
+
+    expect(result.summary.total).toBe(1);
+    expect(result.summary.durationMs).toBe(12);
+    expect(result.summary.requested?.dryRun).toBe(true);
+    expect(result.snapshots[0].readiness).toBe("blocked");
+    expect(result.snapshots[0].kind).toBe("feishu");
+  });
+
+  it("throws when connector sync returns non-200", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400
+      })
+    );
+
+    await expect(syncConnectors({ connector: "unknown" })).rejects.toThrow("Sync connectors failed: 400");
+  });
