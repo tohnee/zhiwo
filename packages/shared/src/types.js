@@ -5,7 +5,8 @@ export function createSource({
   status,
   mode,
   count,
-  detail = ""
+  detail = "",
+  ...extra
 }) {
   return {
     id,
@@ -14,7 +15,8 @@ export function createSource({
     status,
     mode,
     count,
-    detail
+    detail,
+    ...extra
   };
 }
 
@@ -109,6 +111,60 @@ export function createEditorBlock({
     type,
     content,
     sourceIds
+  };
+}
+
+export function createEntity({ id, label, type = "Concept", attributes = {} }) {
+  return {
+    id,
+    label,
+    type,
+    attributes
+  };
+}
+
+export function createRelation({ id, from, to, type, evidence = "" }) {
+  return {
+    id,
+    from,
+    to,
+    type,
+    evidence
+  };
+}
+
+export function createTimelineEvent({ id, entityId, occurredAt, summary, sourceId }) {
+  return {
+    id,
+    entityId,
+    occurredAt,
+    summary,
+    sourceId
+  };
+}
+
+export function createConflict({ id, leftEntityId, rightEntityId, reason, status = "open" }) {
+  return {
+    id,
+    leftEntityId,
+    rightEntityId,
+    reason,
+    status
+  };
+}
+
+export function createGraphRagSchema() {
+  return {
+    entities: ["Person", "Concept", "Event", "Decision"],
+    relations: ["says", "references", "contradicts", "causes"],
+    timeline: {
+      key: "occurredAt",
+      mode: "append_only"
+    },
+    conflict: {
+      strategy: "rule+agent",
+      statuses: ["open", "validated", "dismissed"]
+    }
   };
 }
 

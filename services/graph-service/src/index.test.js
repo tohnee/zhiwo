@@ -297,3 +297,35 @@ test("loads note documents, updates note content, creates folders and moves note
   assert.equal(folder.name, "Projects");
   assert.equal(moved.folderId, "folder-projects");
 });
+
+test("exposes GraphRAG v2 schema with timeline and conflict sections", () => {
+  const service = createGraphService();
+  const schema = service.getGraphRagSchema();
+
+  assert.ok(schema.entities.includes("Decision"));
+  assert.ok(schema.relations.includes("contradicts"));
+  assert.equal(schema.timeline.key, "occurredAt");
+  assert.equal(schema.conflict.strategy, "rule+agent");
+});
+
+test("ingests async event into entities timeline and conflicts", async () => {
+  const service = createGraphService();
+
+  const result = await service.ingestEvent({
+    id: "im-1",
+    source: "telegram",
+    occurredAt: "2026-04-26T10:00:00.000Z",
+    text: "Apple plan not aligned with Tesla roadmap",
+    entities: [
+      { id: "entity-apple", label: "Apple", type: "Concept" },
+      { id: "entity-tesla", label: "Tesla", type: "Concept" }
+    ]
+  });
+
+  const timeline = await service.getTimeline(5);
+  const conflicts = await service.getConflicts();
+
+  assert.equal(result.entities.length, 2);
+  assert.equal(timeline.length > 0, true);
+  assert.equal(conflicts.length > 0, true);
+});

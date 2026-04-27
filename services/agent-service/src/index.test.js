@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { createAgentService } from "./index.js";
 
-test("runs planner, retriever, critic in order and returns grounded fallback answer", async () => {
+test("runs 6-agent state machine and returns grounded fallback answer", async () => {
   const service = createAgentService({
     llm: null,
     graphService: {
@@ -21,6 +21,15 @@ test("runs planner, retriever, critic in order and returns grounded fallback ans
             }
           ]
         };
+      },
+      async listSourceDocuments() {
+        return [];
+      },
+      async getTimeline() {
+        return [];
+      },
+      async getConflicts() {
+        return [];
       }
     },
     ingestionService: {
@@ -30,13 +39,21 @@ test("runs planner, retriever, critic in order and returns grounded fallback ans
     }
   });
 
-  const result = await service.run("Summarize latest thesis");
+  const result = await service.run("Summarize latest thesis", { retrievalTopK: 2 });
 
-  assert.deepEqual(result.steps.map((step) => step.agent), ["Planner", "Retriever", "Critic"]);
+  assert.deepEqual(result.steps.slice(0, 6).map((step) => step.agent), [
+    "Collector",
+    "Structuring",
+    "Analyst",
+    "Planner",
+    "Creator",
+    "Critic"
+  ]);
   assert.match(result.answer, /Summarize latest thesis/);
   assert.equal(result.citations[0].label, "AI-native OS");
   assert.equal(result.citations[0].sourceId, "rss");
   assert.equal(result.mode, "fallback");
+  assert.equal(result.parameters.retrievalTopK, 2);
 });
 
 test("uses live llm when an api key is configured", async () => {
@@ -56,6 +73,15 @@ test("uses live llm when an api key is configured", async () => {
           storageMode: "neo4j",
           nodes: [{ id: "n1", label: "AI-native OS", type: "Concept", confidence: 0.96, summary: "系统核心定位" }]
         };
+      },
+      async listSourceDocuments() {
+        return [];
+      },
+      async getTimeline() {
+        return [];
+      },
+      async getConflicts() {
+        return [];
       }
     },
     ingestionService: {

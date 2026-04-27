@@ -42,3 +42,12 @@
 
 - 创建公开仓库 `Almanack` 并上传代码
 - 汇总第三阶段结果与剩余发布事项
+
+## 2026-04-27
+
+### 已完成
+
+- 确认全部现有代码已在 `work` 分支（本地仅存在 `work` 分支）。
+- 对 `work` 分支完成一次 Sprint/Phase 1~5 深度复盘，并输出评审文档 `docs/reviews/work-deep-review-2026-04-27.md`。
+- 重新执行 `make check`，服务测试 + Web 测试 + Web 构建全部通过。
+- 完成 `work` 分支 UI demo 渲染检查（Vite dev server + HTTP 可达性），并输出 `docs/reviews/ui-demo-2026-04-27.md`。

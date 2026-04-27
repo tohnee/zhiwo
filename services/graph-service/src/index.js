@@ -1,10 +1,15 @@
 import {
+  createConflict,
   createEditorBlock,
+  createEntity,
   createGraphNode,
+  createGraphRagSchema,
   createNoteDocument,
   createNoteFolder,
+  createRelation,
   createSourceDocument,
   createSourceExcerpt,
+  createTimelineEvent,
   hasNeo4jConfig
 } from "@knowledgeos/shared";
 
@@ -143,6 +148,13 @@ export function createGraphService({
   let memorySummary = buildMemorySummary();
   const memorySourceDocuments = buildMemorySourceDocuments();
   const memoryNoteTree = buildMemoryNoteTree();
+  const schema = createGraphRagSchema();
+  const memoryEntities = [
+    createEntity({ id: "entity-ai-native-os", label: "AI-native OS", type: "Concept" })
+  ];
+  const memoryRelations = [];
+  const memoryTimeline = [];
+  const memoryConflicts = [];
   let memoryNotes = [
     createNoteDocument({
       id: "note-block-1",
@@ -203,7 +215,10 @@ export function createGraphService({
       },
       async saveNoteDocument(note) {
         const saved = createNoteDocument(note);
-        memoryNotes = memoryNotes.map((item) => (item.id === saved.id ? saved : item));
+        const existing = memoryNotes.find((item) => item.id === saved.id);
+        memoryNotes = existing
+          ? memoryNotes.map((item) => (item.id === saved.id ? saved : item))
+          : [...memoryNotes, saved];
         return saved;
       },
       async createNoteFolder({ parentId, name }) {
@@ -258,7 +273,8 @@ export function createGraphService({
       if (!adapter && storage.mode === "neo4j") {
         const driver = await connectNeo4j(env);
         try {
-          return await loadGraphSummaryFromNeo4j(driver);
+          const summary = await loadGraphSummaryFromNeo4j(driver);
+          return { ...summary, storageMode: "neo4j" };
         } finally {
           await driver.close();
         }
@@ -306,7 +322,7 @@ export function createGraphService({
         }
       }
 
-      return activeAdapter.listSourceDocuments(storage.mode);
+      return activeAdapter.listSourceDocuments();
     },
 
     async getSourceDocument(id) {
@@ -320,7 +336,7 @@ export function createGraphService({
         }
       }
 
-      return activeAdapter.getSourceDocument(id, storage.mode);
+      return activeAdapter.getSourceDocument(id);
     },
 
     async getNoteTree() {
@@ -334,21 +350,21 @@ export function createGraphService({
         }
       }
 
-      return activeAdapter.getNoteTree(storage.mode);
+      return activeAdapter.getNoteTree();
     },
 
-    async saveAnswerToNote(input) {
+    async saveAnswerToNote(payload) {
       const storage = await this.getStorageStatus();
       if (!adapter && storage.mode === "neo4j") {
         const driver = await connectNeo4j(env);
         try {
-          return await saveAnswerToNeo4j(driver, input);
+          return await saveAnswerToNeo4j(driver, payload);
         } finally {
           await driver.close();
         }
       }
 
-      return activeAdapter.saveAnswerToNote(input, storage.mode);
+      return activeAdapter.saveAnswerToNote(payload);
     },
 
     async getNoteDocument(id) {
@@ -362,7 +378,7 @@ export function createGraphService({
         }
       }
 
-      return activeAdapter.getNoteDocument(id, storage.mode);
+      return activeAdapter.getNoteDocument(id);
     },
 
     async saveNoteDocument(note) {
@@ -376,7 +392,7 @@ export function createGraphService({
         }
       }
 
-      return activeAdapter.saveNoteDocument(note, storage.mode);
+      return activeAdapter.saveNoteDocument(note);
     },
 
     async createNoteFolder(input) {
@@ -390,7 +406,7 @@ export function createGraphService({
         }
       }
 
-      return activeAdapter.createNoteFolder(input, storage.mode);
+      return activeAdapter.createNoteFolder(input);
     },
 
     async moveNoteDocument(input) {
@@ -404,7 +420,141 @@ export function createGraphService({
         }
       }
 
-      return activeAdapter.moveNoteDocument(input, storage.mode);
+      return activeAdapter.moveNoteDocument(input);
+    },
+
+    getGraphRagSchema() {
+      return schema;
+    },
+
+    async ingestEvent(event) {
+      const entities =
+        event.entities?.map((entity) =>
+          createEntity({
+            ...entity,
+            attributes: {
+              ...(entity.attributes ?? {}),
+              confidence: Number(entity.confidence ?? 0.7),
+              source: event.source
+            }
+          })
+        ) ?? [];
+      for (const entity of entities) {
+        const existing = memoryEntities.find((item) => item.id === entity.id);
+        if (!existing) {
+          memoryEntities.push(entity);
+        }
+
+        const nodeExists = memorySummary.nodes.some((node) => node.id === entity.id);
+        if (!nodeExists) {
+          memorySummary.nodes.push(
+            createGraphNode({
+              id: entity.id,
+              label: entity.label,
+              type: entity.type,
+              confidence: Number(entity.attributes?.confidence ?? 0.7),
+              summary: `Extracted from ${event.source}`,
+              metadata: { storageMode: "memory", sourceIds: [event.source], extraction: "semantic-chunk" }
+            })
+          );
+        }
+      }
+
+      if (entities.length >= 2) {
+        const relationConfidence = Math.min(0.95, 0.6 + entities.length * 0.1);
+        memoryRelations.push(
+          createRelation({
+            id: `rel-${Date.now()}`,
+            from: entities[0].id,
+            to: entities[1].id,
+            type: /causes|because/i.test(event.text) ? "causes" : "references",
+            evidence: JSON.stringify({ text: event.text, confidence: relationConfidence })
+          })
+        );
+      }
+
+      for (const entity of entities) {
+        memoryTimeline.push(
+          createTimelineEvent({
+            id: `timeline-${Date.now()}-${entity.id}`,
+            entityId: entity.id,
+            occurredAt: event.occurredAt,
+            summary: event.text,
+            sourceId: event.source
+          })
+        );
+      }
+
+      if (/not|contradict|however|conflict/i.test(event.text) && entities.length >= 2) {
+        memoryConflicts.push(
+          createConflict({
+            id: `conflict-${Date.now()}`,
+            leftEntityId: entities[0].id,
+            rightEntityId: entities[1].id,
+            reason: `Potential contradiction in message: ${event.text.slice(0, 120)}`,
+            status: "open"
+          })
+        );
+      }
+
+      return {
+        entities,
+        relationCount: memoryRelations.length,
+        timelineCount: memoryTimeline.length,
+        conflictCount: memoryConflicts.length
+      };
+    },
+
+    async getTimeline(limit = 20) {
+      return memoryTimeline
+        .slice()
+        .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
+        .slice(0, limit);
+    },
+
+    async getConflicts() {
+      return memoryConflicts;
+    },
+
+    async getRelations(limit = 20) {
+      return memoryRelations.slice(-limit);
+    },
+
+    async explainConflict(conflictId) {
+      const conflict = memoryConflicts.find((item) => item.id === conflictId) ?? null;
+      if (!conflict) {
+        return null;
+      }
+
+      const left = memoryEntities.find((entity) => entity.id === conflict.leftEntityId);
+      const right = memoryEntities.find((entity) => entity.id === conflict.rightEntityId);
+      return {
+        conflict,
+        explanation: `${left?.label ?? conflict.leftEntityId} and ${right?.label ?? conflict.rightEntityId} are flagged because opposite claims appeared in adjacent timeline events.`,
+        strategy: "rule+agent",
+        confidence: 0.72
+      };
+    },
+
+    async saveGeneratedArtifact({ format, title, content, citations = [], folderId = "folder-research" }) {
+      const note = await this.saveNoteDocument({
+        id: `artifact-${Date.now()}`,
+        title,
+        folderId,
+        content,
+        citations
+      });
+
+      return {
+        artifact: {
+          id: note.id,
+          format,
+          title,
+          content,
+          citations
+        },
+        note
+      };
     }
   };
 }

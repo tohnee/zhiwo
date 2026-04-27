@@ -7,11 +7,13 @@ import { createGraphService } from "@knowledgeos/graph-service";
 import { createIngestionService } from "@knowledgeos/ingestion-service";
 
 function sendJson(response, statusCode, payload) {
+  const requestId = response.getHeader("x-request-id");
   response.writeHead(statusCode, {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Content-Type": "application/json; charset=utf-8"
+    "Content-Type": "application/json; charset=utf-8",
+    ...(requestId ? { "x-request-id": requestId } : {})
   });
   response.end(JSON.stringify(payload));
 }
@@ -38,11 +40,79 @@ export function createServer({
   const manualSources = [];
   const chatMessages = [createChatMessage("assistant", "Ready to reason over your latest knowledge graph.")];
   let editorBlocks = null;
+  const debugRuns = [];
+  let baselineRunId = null;
+  let lastRunParameters = {
+    retrievalTopK: 3,
+    temperature: 0.2,
+    forceLive: false,
+    outputFormat: "chat"
+  };
+
+  function createRequestId(request) {
+    const incoming = request.headers["x-request-id"];
+    if (typeof incoming === "string" && incoming.trim()) {
+      return incoming.trim();
+    }
+    return `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  async function buildHealthPayload(requestId) {
+    const graphStatus = typeof graphService.getStorageStatus === "function" ? await graphService.getStorageStatus() : null;
+    const telegram = typeof ingestionService.getTelegramStatus === "function" ? ingestionService.getTelegramStatus() : null;
+    return {
+      status: "ok",
+      service: "knowledgeos-api",
+      requestId,
+      dependencies: {
+        graph: graphStatus,
+        llm: {
+          configured: Boolean(process.env.DEEPSEEK_API_KEY ?? process.env.LLM_API_KEY ?? "")
+        },
+        ingestion: telegram ? { telegramMode: telegram.mode, telegramReason: telegram.reason } : null
+      }
+    };
+  }
+
+
+  function snapshotRun(prompt, result) {
+    const run = {
+      id: `run-${Date.now()}-${debugRuns.length + 1}`,
+      prompt,
+      answer: result.answer,
+      citations: result.citations,
+      parameters: result.parameters,
+      mode: result.mode,
+      createdAt: new Date().toISOString()
+    };
+    debugRuns.push(run);
+    if (!baselineRunId) {
+      baselineRunId = run.id;
+    }
+
+    return run;
+  }
+
+  function diffRuns(fromRun, toRun) {
+    return {
+      from: fromRun?.id ?? null,
+      to: toRun?.id ?? null,
+      citationDelta: (toRun?.citations?.length ?? 0) - (fromRun?.citations?.length ?? 0),
+      answerLengthDelta: (toRun?.answer?.length ?? 0) - (fromRun?.answer?.length ?? 0),
+      parameterChanges: {
+        retrievalTopK: [fromRun?.parameters?.retrievalTopK ?? null, toRun?.parameters?.retrievalTopK ?? null],
+        temperature: [fromRun?.parameters?.temperature ?? null, toRun?.parameters?.temperature ?? null],
+        forceLive: [fromRun?.parameters?.forceLive ?? null, toRun?.parameters?.forceLive ?? null]
+      }
+    };
+  }
 
   async function buildDashboard() {
-    const [sources, graphSummary] = await Promise.all([
+    const [sources, graphSummary, conflicts, timeline] = await Promise.all([
       ingestionService.listSources(),
-      graphService.getSummary()
+      graphService.getSummary(),
+      typeof graphService.getConflicts === "function" ? graphService.getConflicts() : [],
+      typeof graphService.getTimeline === "function" ? graphService.getTimeline(3) : []
     ]);
     const storageMode =
       graphSummary.storageMode ??
@@ -59,21 +129,47 @@ export function createServer({
       },
       debug: {
         agentSteps: [
-          "Planner -> Scope the question",
-          "Retriever -> Pull graph nodes and source evidence",
-          "Critic -> Check conflicts before response"
+          "Collector -> Gather sources/events",
+          "Structuring -> Build GraphRAG v2 entities",
+          "Analyst -> Track timeline and conflicts",
+          "Planner -> Scope ask",
+          "Creator -> Generate answer/artifact",
+          "Critic -> Validate + replay"
         ],
         retrieval: [
           `RSS mode: ${sources.find((source) => source.kind === "rss")?.mode ?? "unknown"}`,
           `PDF mode: ${sources.find((source) => source.kind === "pdf")?.mode ?? "unknown"}`,
           `Storage mode: ${storageMode}`
         ],
-        reasoning: ["Conflict check complete", "Timeline aligned", "Sources traceable"]
+        reasoning: [
+          `Conflict count: ${conflicts.length}`,
+          `Timeline points: ${timeline.length}`,
+          "Sources traceable"
+        ],
+        parameters: lastRunParameters,
+        baselineRunId,
+        runCount: debugRuns.length
       }
     };
   }
 
   return http.createServer(async (request, response) => {
+    const requestId = createRequestId(request);
+    const startedAt = Date.now();
+    response.setHeader("x-request-id", requestId);
+    response.on("finish", () => {
+      console.log(
+        JSON.stringify({
+          event: "api_request",
+          requestId,
+          method: request.method,
+          path: request.url,
+          statusCode: response.statusCode,
+          durationMs: Date.now() - startedAt
+        })
+      );
+    });
+
     if (!request.url) {
       sendJson(response, 400, { error: "Missing URL" });
       return;
@@ -87,7 +183,7 @@ export function createServer({
     }
 
     if (request.method === "GET" && url.pathname === "/health") {
-      sendJson(response, 200, { status: "ok", service: "knowledgeos-api" });
+      sendJson(response, 200, await buildHealthPayload(requestId));
       return;
     }
 
@@ -103,13 +199,13 @@ export function createServer({
 
       manualSources.push(
         createSource({
-        id: `${source}-${Date.now()}`,
-        name: source.charAt(0).toUpperCase() + source.slice(1),
-        kind: source,
-        status: "indexed",
-        mode: "manual",
-        count: items,
-        detail: "Added from API ingest endpoint."
+          id: `${source}-${Date.now()}`,
+          name: source.charAt(0).toUpperCase() + source.slice(1),
+          kind: source,
+          status: "indexed",
+          mode: "manual",
+          count: items,
+          detail: "Added from API ingest endpoint."
         })
       );
 
@@ -120,18 +216,209 @@ export function createServer({
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/connectors/catalog") {
+      sendJson(response, 200, {
+        connectors: ingestionService.getConnectorCatalog()
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/connectors/sync") {
+      const body = await readJsonBody(request);
+      const connector = body.connector ? String(body.connector) : undefined;
+      const since = body.since ? String(body.since) : undefined;
+      if (since && Number.isNaN(new Date(since).getTime())) {
+        sendJson(response, 400, { error: "Invalid since timestamp." });
+        return;
+      }
+      if (body.limit !== undefined) {
+        const limit = Number(body.limit);
+        if (!Number.isFinite(limit) || limit < 1) {
+          sendJson(response, 400, { error: "Invalid limit. Must be a positive number." });
+          return;
+        }
+      }
+      let result;
+      try {
+        result = await ingestionService.syncAllConnectors({
+          connector,
+          cursor: body.cursor ?? undefined,
+          since,
+          limit: body.limit ?? undefined,
+          dryRun: Boolean(body.dryRun ?? false)
+        });
+      } catch (error) {
+        if (/Unsupported connector kind/.test(error.message)) {
+          sendJson(response, 400, { error: error.message });
+          return;
+        }
+        throw error;
+      }
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/ingest/im-event") {
+      const body = await readJsonBody(request);
+      const message = ingestionService.enqueueImMessage({
+        source: String(body.source ?? "telegram"),
+        threadId: String(body.threadId ?? "default"),
+        sender: String(body.sender ?? "unknown"),
+        text: String(body.text ?? ""),
+        occurredAt: String(body.occurredAt ?? new Date().toISOString())
+      });
+      const processed = await ingestionService.processQueuedImMessages(async (event) => {
+        await graphService.ingestEvent(event);
+      });
+
+      sendJson(response, 200, {
+        queued: message.id,
+        processed: processed.length,
+        latest: processed.at(-1) ?? null
+      });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/chat") {
       const body = await readJsonBody(request);
       const prompt = String(body.prompt ?? "");
-      const result = await agentService.run(prompt);
+      lastRunParameters = {
+        retrievalTopK: Number(body.retrievalTopK ?? 3),
+        temperature: Number(body.temperature ?? 0.2),
+        forceLive: Boolean(body.forceLive ?? false),
+        outputFormat: "chat"
+      };
+      const result = await agentService.run(prompt, lastRunParameters);
+      const run = snapshotRun(prompt, result);
       chatMessages.push(createChatMessage("user", prompt));
       chatMessages.push(createChatMessage("assistant", result.answer));
 
       sendJson(response, 200, {
         answer: result.answer,
         mode: result.mode,
+        parameters: result.parameters,
         steps: result.steps.map((step) => `${step.agent}${step.intent ? ` -> ${step.intent}` : ""}`),
-        citations: result.citations
+        citations: result.citations,
+        runId: run.id
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/chat/rerun") {
+      const body = await readJsonBody(request);
+      const prompt = String(body.prompt ?? "");
+      lastRunParameters = {
+        retrievalTopK: Number(body.retrievalTopK ?? 3),
+        temperature: Number(body.temperature ?? 0.2),
+        forceLive: Boolean(body.forceLive ?? false),
+        outputFormat: String(body.outputFormat ?? "chat")
+      };
+
+      const result = await agentService.run(prompt, lastRunParameters);
+      const run = snapshotRun(prompt, result);
+      sendJson(response, 200, {
+        answer: result.answer,
+        mode: result.mode,
+        parameters: result.parameters,
+        steps: result.steps,
+        citations: result.citations,
+        runId: run.id
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/generate/report-markdown") {
+      const body = await readJsonBody(request);
+      const topic = String(body.topic ?? "Untitled report");
+      const report = await agentService.generateMarkdownReport({
+        topic,
+        retrievalTopK: Number(body.retrievalTopK ?? 4)
+      });
+      const saved = await graphService.saveGeneratedArtifact({
+        format: "markdown",
+        title: report.title,
+        content: report.content,
+        citations: report.citations,
+        folderId: String(body.folderId ?? "folder-research")
+      });
+
+      sendJson(response, 200, { report, saved });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/generate/ppt") {
+      const body = await readJsonBody(request);
+      const topic = String(body.topic ?? "Untitled deck");
+      const deck = await agentService.generatePpt({
+        topic,
+        slideCount: Number(body.slideCount ?? 3)
+      });
+      const saved = await graphService.saveGeneratedArtifact({
+        format: "ppt",
+        title: deck.title,
+        content: deck.content,
+        citations: deck.citations,
+        folderId: String(body.folderId ?? "folder-research")
+      });
+
+      sendJson(response, 200, { deck, saved });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/generate/export") {
+      const body = await readJsonBody(request);
+      const exported = agentService.exportArtifact({
+        format: String(body.format ?? "markdown"),
+        artifact: body.artifact ?? {}
+      });
+      sendJson(response, 200, { exported });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/debug/runs") {
+      sendJson(response, 200, {
+        baselineRunId,
+        runs: debugRuns
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/debug/baseline") {
+      const body = await readJsonBody(request);
+      baselineRunId = String(body.runId ?? baselineRunId ?? "");
+      sendJson(response, 200, { baselineRunId });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/debug/diff") {
+      const fromId = String(url.searchParams.get("from") ?? baselineRunId ?? "");
+      const toId = String(url.searchParams.get("to") ?? debugRuns.at(-1)?.id ?? "");
+      const fromRun = debugRuns.find((run) => run.id === fromId) ?? null;
+      const toRun = debugRuns.find((run) => run.id === toId) ?? null;
+      sendJson(response, 200, {
+        diff: diffRuns(fromRun, toRun)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/graph/schema") {
+      sendJson(response, 200, {
+        schema: graphService.getGraphRagSchema()
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/graph/timeline") {
+      const limit = Number(url.searchParams.get("limit") ?? 20);
+      sendJson(response, 200, {
+        timeline: await graphService.getTimeline(limit)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/graph/conflicts") {
+      sendJson(response, 200, {
+        conflicts: await graphService.getConflicts()
       });
       return;
     }
