@@ -52,3 +52,4 @@
 - 重新执行 `make check`，服务测试 + Web 测试 + Web 构建全部通过。
 - 完成 `work` 分支 UI demo 渲染检查（Vite dev server + HTTP 可达性），并输出 `docs/reviews/ui-demo-2026-04-27.md`。
 - 新建总分支 `total-prs`（指向与 `work` 相同的最新提交），并输出合并报告 `docs/reviews/pr-consolidation-2026-04-27.md`。
+- 尝试执行 GitHub PR 发布；当前仓库未配置 remote，已输出阻塞说明与可执行命令到 `docs/reviews/github-pr-publish-2026-04-27.md`。
