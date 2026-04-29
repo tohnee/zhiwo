@@ -53,3 +53,4 @@
 - 完成 `work` 分支 UI demo 渲染检查（Vite dev server + HTTP 可达性），并输出 `docs/reviews/ui-demo-2026-04-27.md`。
 - 新建总分支 `total-prs`（指向与 `work` 相同的最新提交），并输出合并报告 `docs/reviews/pr-consolidation-2026-04-27.md`。
 - 已配置远程仓库 `https://github.com/tohnee/zhiwo` 并尝试 push/ls-remote，但受网络隧道 403 限制无法直连 GitHub；阻塞与后续命令已更新到 `docs/reviews/github-pr-publish-2026-04-27.md`。
+- 按“全量汇总”要求新建分支 `all-history-rollup-2026-04-27`（从 `work` 头部创建），并输出核对报告 `docs/reviews/history-rollup-2026-04-27.md`。
